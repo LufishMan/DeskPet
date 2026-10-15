@@ -176,9 +176,6 @@ fn run() -> Result<(), AnyError> {
             .into());
     }
     let data_dir = deskpet_sys::data_dir().ok_or("找不到使用者資料夾（%LOCALAPPDATA%）")?;
-    let (runtime, _startup) = Runtime::open(&data_dir.join("deskpet.db"))?;
-    let shared = Arc::new(Mutex::new(runtime));
-    let engine = Arc::clone(&shared);
 
     let shortcuts = tauri_plugin_global_shortcut::Builder::new()
         .with_shortcut(BOSS_KEY)?
@@ -190,8 +187,9 @@ fn run() -> Result<(), AnyError> {
         .build();
 
     tauri::Builder::default()
+        // 必須最先註冊：重複開啟時，把已經在執行的寵物叫出來，這個新程式直接結束（§15.3）
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| set_visible(app, Some(true))))
         .plugin(shortcuts)
-        .manage(Shared(shared))
         .invoke_handler(tauri::generate_handler![get_pet, start_drag, show_menu])
         .on_menu_event(|app, event| match event.id().as_ref() {
             "hide" => set_visible(app, Some(false)),
@@ -200,6 +198,12 @@ fn run() -> Result<(), AnyError> {
             _ => {}
         })
         .setup(move |app| {
+            // 存檔鎖仍然保留：防止開發用的 deskpet-cli 同時寫入同一份存檔
+            let (runtime, _startup) = Runtime::open(&data_dir.join("deskpet.db"))
+                .map_err(|e| format!("無法開啟存檔：{e}\n\n如果正在執行開發用的 deskpet-cli，請先關閉它。"))?;
+            let shared = Arc::new(Mutex::new(runtime));
+            let engine = Arc::clone(&shared);
+            app.manage(Shared(shared));
             create_pet_window(app.handle(), &data_dir)?;
             create_tray(app.handle())?;
             std::thread::Builder::new().name("deskpet-engine".into()).spawn(move || {
