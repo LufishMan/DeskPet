@@ -17,6 +17,9 @@ use windows_sys::Win32::System::Power::{
 };
 use windows_sys::Win32::System::SystemInformation::{GetLocalTime, GlobalMemoryStatusEx, MEMORYSTATUSEX};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes, GetSystemTimes};
+use windows_sys::Win32::UI::Shell::{
+    QUNS_BUSY, QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{DEVICE_NOTIFY_CALLBACK, PBT_APMRESUMEAUTOMATIC, PBT_APMSUSPEND};
 
 use crate::{CpuReading, LocalTime, MemoryReading, PowerEvent, SelfCpuSource};
@@ -153,6 +156,13 @@ pub fn memory() -> Option<MemoryReading> {
         0.0
     };
     Some(MemoryReading { physical_load: f64::from(status.dwMemoryLoad) / 100.0, commit_load })
+}
+
+/// 是否有全螢幕程式或簡報正在進行（§10）。由系統判斷，不需要列舉視窗。
+pub fn fullscreen_active() -> bool {
+    let mut state = 0;
+    let ok = unsafe { SHQueryUserNotificationState(&mut state) } >= 0;
+    ok && matches!(state, QUNS_BUSY | QUNS_RUNNING_D3D_FULL_SCREEN | QUNS_PRESENTATION_MODE)
 }
 
 pub fn local_now() -> LocalTime {

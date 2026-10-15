@@ -49,6 +49,17 @@ function paintBubble(out: Uint8ClampedArray, kind: BubbleKind, ox: number, oy: n
   });
 }
 
+/** 每一列不透明像素的位元遮罩（第 x 位元代表第 x 欄），給後端設定視窗形狀 */
+export function shapeOf(rgba: Uint8ClampedArray): number[] {
+  const rows: number[] = [];
+  for (let y = 0; y < H; y++) {
+    let bits = 0;
+    for (let x = 0; x < W; x++) if (rgba[(y * W + x) * 4 + 3] > 0) bits += 2 ** x;
+    rows.push(bits);
+  }
+  return rows;
+}
+
 export function renderScene(out: Uint8ClampedArray, scene: Scene): void {
   out.fill(0);
   const { view } = scene;

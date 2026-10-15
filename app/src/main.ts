@@ -4,7 +4,7 @@
 import { invoke } from '@tauri-apps/api/core';
 
 import type { BubbleKind } from './bubbles.ts';
-import { H, W, renderScene } from './render.ts';
+import { H, W, renderScene, shapeOf, type Scene } from './render.ts';
 import type { PetView, Pose } from './types.ts';
 
 const canvas = document.getElementById('pet') as HTMLCanvasElement;
@@ -12,6 +12,26 @@ canvas.width = W;
 canvas.height = H;
 const ctx = canvas.getContext('2d')!;
 const image = ctx.createImageData(W, H);
+/**
+ * 畫布以整數倍放大、靠底置中。Windows 有最小視窗寬度（約 136 像素），
+ * 視窗可能比畫布寬，不能直接撐滿，否則會變成非整數倍放大。後端的視窗形狀用同樣的方式計算位移。
+ */
+function layout(): void {
+  const dpr = window.devicePixelRatio || 1;
+  const scale = Math.max(1, Math.round(window.innerHeight / H));
+  const width = W * scale;
+  const height = H * scale;
+  canvas.style.width = `${width}px`;
+  canvas.style.height = `${height}px`;
+  canvas.style.left = `${Math.floor((window.innerWidth * dpr - width * dpr) / 2) / dpr}px`;
+  canvas.style.top = `${window.innerHeight - height}px`;
+}
+layout();
+window.addEventListener('resize', layout);
+
+/** 算視窗形狀用的畫布：不含跳躍和晃動，這兩種位移由後端擴張形狀涵蓋 */
+const shapeBuffer = new Uint8ClampedArray(W * H * 4);
+let sentShape = '';
 
 /** 每 15 秒向後端要一次狀態；數值每 5 分鐘才結算一次，不需要更頻繁 */
 const POLL_MS = 15_000;
@@ -51,6 +71,8 @@ async function refresh(): Promise<void> {
 function moodBubble(v: PetView, now: number): BubbleKind | null {
   const cycle = (period: number, shown: number): boolean => now % period < shown;
   if (v.sleeping) return cycle(2000, 1200) ? 'zzz' : null;
+  // 專注模式不主動找你（§10）
+  if (v.focus) return null;
   switch (v.mood) {
     case 'happy':
       return cycle(18_000, 2500) ? 'note' : null;
@@ -81,7 +103,7 @@ function draw(now: number): boolean {
   if (pose === 'idle' && now < blinkUntil) pose = 'blink';
 
   const wobbling = view.stage === 'egg' && (view.waiting || active?.wobble === true);
-  renderScene(image.data, {
+  const scene: Scene = {
     view,
     pose,
     breathe: Math.floor(now / 1000) % 2 === 1,
@@ -89,9 +111,24 @@ function draw(now: number): boolean {
     hop: active?.hop === true && Math.floor(now / 150) % 2 === 0,
     wobble: wobbling ? [-1, 0, 1, 0][Math.floor(now / 120) % 4] : 0,
     bubble: active ? active.bubble : moodBubble(view, now),
-  });
+  };
+  renderScene(image.data, scene);
   ctx.putImageData(image, 0, 0);
+  updateShape(scene);
   return active !== null || wobbling;
+}
+
+/** 形狀改變時才通知後端（點擊穿透透明區域） */
+function updateShape(scene: Scene): void {
+  renderScene(shapeBuffer, { ...scene, hop: false, wobble: 0 });
+  const rows = shapeOf(shapeBuffer);
+  const key = rows.join(',');
+  if (key === sentShape) return;
+  sentShape = key;
+  invoke('set_shape', { rows }).catch((error) => {
+    sentShape = '';
+    console.error('設定視窗形狀失敗', error);
+  });
 }
 
 function schedule(delay: number): void {

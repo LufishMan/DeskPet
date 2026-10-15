@@ -9,12 +9,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[cfg(windows)]
 mod windows;
 #[cfg(windows)]
-pub use windows::{SystemSampler, harden_dll_search, local_now, memory, subscribe_power, PowerSubscription};
+pub use windows::{
+    PowerSubscription, SystemSampler, fullscreen_active, harden_dll_search, local_now, memory, subscribe_power,
+};
 
 #[cfg(not(windows))]
 mod fallback;
 #[cfg(not(windows))]
-pub use fallback::{SystemSampler, harden_dll_search, local_now, memory, subscribe_power, PowerSubscription};
+pub use fallback::{
+    PowerSubscription, SystemSampler, fullscreen_active, harden_dll_search, local_now, memory, subscribe_power,
+};
 
 /// 一次 CPU 取樣（與上一次取樣之間的平均）
 #[derive(Debug, Clone, Copy, PartialEq)]

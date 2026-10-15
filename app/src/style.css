@@ -9,9 +9,8 @@ body {
 }
 
 canvas {
+  position: absolute;
   display: block;
-  width: 100%;
-  height: 100%;
-  /* 整數倍放大、nearest-neighbor（§11.2） */
+  /* 整數倍放大、nearest-neighbor（§11.2）；大小與位置由 main.ts 的 layout 設定 */
   image-rendering: pixelated;
 }

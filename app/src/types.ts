@@ -22,4 +22,6 @@ export interface PetView {
   rare: boolean;
   hue_shift: number;
   egg_progress: number;
+  /** 專注模式：停止主動冒泡泡 */
+  focus: boolean;
 }

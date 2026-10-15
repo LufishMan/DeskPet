@@ -10,3 +10,4 @@ publish.workspace = true
 deskpet-core.workspace = true
 deskpet-store.workspace = true
 deskpet-sys.workspace = true
+serde.workspace = true

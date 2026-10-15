@@ -10,6 +10,7 @@ use deskpet_core::calendar::civil_from_days;
 use deskpet_core::{Event, Pet};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 pub const SCHEMA_VERSION: i32 = 1;
 /// tick 明細保留天數，之後彙總成每日統計（§14.3 R8）
@@ -254,6 +255,24 @@ impl Store {
         Ok(())
     }
 
+    /// 讀取設定（§13 Settings）。值格式不對時當作沒有設定，不信任存檔內容（§14.3 R6）。
+    pub fn setting<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        let value: Option<String> = self
+            .conn
+            .query_row("SELECT value FROM settings WHERE key = ?1", params![key], |r| r.get(0))
+            .optional()?;
+        Ok(value.and_then(|v| serde_json::from_str(&v).ok()))
+    }
+
+    pub fn set_setting<T: Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+            params![key, serde_json::to_string(value)?],
+        )?;
+        Ok(())
+    }
+
     /// 從某一天起的 tick 明細，依時間排序
     pub fn ticks_since(&self, day: i32) -> Result<Vec<TickRecord>> {
         let mut stmt = self.conn.prepare(
@@ -472,6 +491,20 @@ mod tests {
         assert_eq!(std::fs::read_dir(&backups).unwrap().count(), BACKUP_KEEP);
         drop(store);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn settings_round_trip_and_ignore_bad_values() {
+        let store = Store::open_in_memory().unwrap();
+        assert_eq!(store.setting::<u8>("scale").unwrap(), None);
+        store.set_setting("scale", &3u8).unwrap();
+        store.set_setting("scale", &4u8).unwrap();
+        assert_eq!(store.setting::<u8>("scale").unwrap(), Some(4));
+        store.set_setting("window_position", &(10, -20)).unwrap();
+        assert_eq!(store.setting::<(i32, i32)>("window_position").unwrap(), Some((10, -20)));
+        // 型別不符（例如手動改壞的存檔）就當作沒有設定
+        store.set_setting("scale", &"huge").unwrap();
+        assert_eq!(store.setting::<u8>("scale").unwrap(), None);
     }
 
     #[test]

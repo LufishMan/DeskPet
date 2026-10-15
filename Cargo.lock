@@ -780,6 +780,7 @@ dependencies = [
  "deskpet-core",
  "deskpet-store",
  "deskpet-sys",
+ "serde",
 ]
 
 [[package]]

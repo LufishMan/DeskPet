@@ -50,6 +50,7 @@ function view(family: Family, species: string, stage: Stage, body: Body = 'stand
     rare: false,
     hue_shift: 128,
     egg_progress: 0,
+    focus: false,
     ...extra,
   };
 }

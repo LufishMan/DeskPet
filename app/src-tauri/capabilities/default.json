@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "寵物視窗只能呼叫本程式的三個自訂指令，不開放任何核心或外掛 API（DESIGN.md §14.4）",
+  "description": "寵物視窗只能呼叫本程式的自訂指令，不開放任何核心或外掛 API（DESIGN.md §14.4）",
   "windows": ["pet"],
-  "permissions": ["allow-get-pet", "allow-start-drag", "allow-show-menu"]
+  "permissions": ["allow-get-pet", "allow-set-shape", "allow-start-drag", "allow-show-menu"]
 }

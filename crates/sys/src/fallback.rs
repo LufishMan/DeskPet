@@ -30,6 +30,11 @@ pub fn memory() -> Option<MemoryReading> {
     None
 }
 
+/// macOS 的全螢幕 App 位在獨立的桌面空間，寵物視窗本來就不會出現（§10）
+pub fn fullscreen_active() -> bool {
+    false
+}
+
 /// 尚未實作時區：暫時使用 UTC
 pub fn local_now() -> LocalTime {
     let now = unix_now();

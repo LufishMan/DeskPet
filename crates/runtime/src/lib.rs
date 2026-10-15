@@ -114,6 +114,14 @@ impl Runtime {
         self.mood.level(&self.balance)
     }
 
+    pub fn setting<T: serde::de::DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
+        Ok(self.store.setting(key)?)
+    }
+
+    pub fn set_setting<T: serde::Serialize>(&self, key: &str, value: &T) -> Result<()> {
+        Ok(self.store.set_setting(key, value)?)
+    }
+
     /// 取樣一次；累積滿一個 tick 時結算並存檔。
     pub fn sample(&mut self) -> Result<Option<Update>> {
         let Some(cpu) = self.sampler.sample_cpu() else { return Ok(None) };

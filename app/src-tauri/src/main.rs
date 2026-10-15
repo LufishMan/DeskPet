@@ -5,25 +5,23 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod shape;
+mod ui;
+
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use deskpet_core::{BodyType, Family, MoodLevel, Species, Stage};
 use deskpet_runtime::{AnyError, Runtime, run_loop};
 use serde::Serialize;
-use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, PhysicalPosition, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder};
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindow, WebviewWindowBuilder, WindowEvent};
 use tauri_plugin_global_shortcut::ShortcutState;
 
-const PET_WINDOW: &str = "pet";
-/// 邏輯畫布 40×44（§2）
-const CANVAS: (f64, f64) = (40.0, 44.0);
-/// 整數倍放大（§11.2：×2／×3／×4，之後做成設定）
-const SCALE: f64 = 3.0;
+use ui::{AppState, PET_WINDOW, TRAY, Ui, lock};
+
 /// 老闆鍵（§10）：用 RegisterHotKey 註冊，不監聽鍵盤
 const BOSS_KEY: &str = "ctrl+alt+h";
-const SCREEN_MARGIN: i32 = 24;
 /// WebView2 啟動參數。自訂後會取代 wry 的預設值，所以預設停用的功能要一起寫上。
 /// - 完全不連網（§14.5 A）：只關背景服務還不夠，WebView2 仍會連線（實測有 DNS over HTTPS
 ///   探測和 Microsoft 端點），所以直接讓所有主機名稱解析失敗，並把對外連線導向不存在的
@@ -33,8 +31,6 @@ const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreen
      --host-resolver-rules=\"MAP * ~NOTFOUND\" --proxy-server=127.0.0.1:9 \
      --disable-background-networking --disable-component-update --disable-sync \
      --disable-domain-reliability --no-first-run --disable-gpu";
-
-struct Shared(Arc<Mutex<Runtime>>);
 
 /// 前端繪製需要的狀態。只給畫面需要的分類結果，不給熱量等原始數值。
 #[derive(Serialize)]
@@ -52,6 +48,8 @@ struct PetView {
     hue_shift: u8,
     /// 蛋的熱量進度 0～1，只用來決定要不要畫裂痕
     egg_progress: f64,
+    /// 專注模式：前端停止主動冒泡泡（§10）
+    focus: bool,
 }
 
 fn err(e: impl ToString) -> String {
@@ -59,8 +57,9 @@ fn err(e: impl ToString) -> String {
 }
 
 #[tauri::command]
-fn get_pet(shared: State<'_, Shared>) -> Result<PetView, String> {
-    let rt = shared.0.lock().map_err(|_| "狀態已損壞")?;
+fn get_pet(state: State<'_, AppState>) -> Result<PetView, String> {
+    let focus = lock(&state.ui).focus;
+    let rt = lock(&state.runtime);
     let (pet, balance) = (rt.pet(), rt.balance());
     Ok(PetView {
         family: pet.family,
@@ -79,7 +78,14 @@ fn get_pet(shared: State<'_, Shared>) -> Result<PetView, String> {
         } else {
             0.0
         },
+        focus,
     })
+}
+
+/// 前端回報目前畫面中不透明的像素，用來設定視窗形狀（點擊穿透透明區域）
+#[tauri::command]
+fn set_shape(window: WebviewWindow, rows: Vec<u64>) -> Result<(), String> {
+    ui::set_shape(window.app_handle(), &window, rows)
 }
 
 #[tauri::command]
@@ -89,31 +95,14 @@ fn start_drag(window: WebviewWindow) -> Result<(), String> {
 
 #[tauri::command]
 fn show_menu(window: WebviewWindow) -> Result<(), String> {
-    let app = window.app_handle();
-    let menu = Menu::with_items(
-        app,
-        &[
-            &MenuItem::with_id(app, "hide", "隱藏（Ctrl+Alt+H）", true, None::<&str>).map_err(err)?,
-            &PredefinedMenuItem::separator(app).map_err(err)?,
-            &MenuItem::with_id(app, "quit", "結束 DeskPet", true, None::<&str>).map_err(err)?,
-        ],
-    )
-    .map_err(err)?;
+    let menu = ui::build_menu(window.app_handle(), false).map_err(err)?;
     window.popup_menu(&menu).map_err(err)
 }
 
-/// 顯示或隱藏寵物視窗；`visible` 為 `None` 時切換
-fn set_visible(app: &AppHandle, visible: Option<bool>) {
-    if let Some(window) = app.get_webview_window(PET_WINDOW) {
-        let show = visible.unwrap_or_else(|| !window.is_visible().unwrap_or(true));
-        let _ = if show { window.show() } else { window.hide() };
-    }
-}
-
-fn create_pet_window(app: &AppHandle, data_dir: &Path) -> tauri::Result<()> {
-    let window = WebviewWindowBuilder::new(app, PET_WINDOW, WebviewUrl::App("index.html".into()))
+fn create_pet_window(app: &AppHandle, data_dir: &Path, scale: u8) -> tauri::Result<WebviewWindow> {
+    WebviewWindowBuilder::new(app, PET_WINDOW, WebviewUrl::App("index.html".into()))
         .title("DeskPet")
-        .inner_size(CANVAS.0 * SCALE, CANVAS.1 * SCALE)
+        .inner_size(ui::logical_size(scale).width, ui::logical_size(scale).height)
         .resizable(false)
         .maximizable(false)
         .minimizable(false)
@@ -130,35 +119,17 @@ fn create_pet_window(app: &AppHandle, data_dir: &Path) -> tauri::Result<()> {
         // WebView2 的使用者資料也放在自己的資料夾（§2、§14.5 A）
         .data_directory(data_dir.join("WebView2"))
         .additional_browser_args(WEBVIEW_ARGS)
-        .build()?;
-
-    // 預設放在主螢幕工作區域的右下角
-    if let Some(monitor) = window.primary_monitor()? {
-        let area = monitor.work_area();
-        let size = window.outer_size()?;
-        let x = area.position.x + area.size.width as i32 - size.width as i32 - SCREEN_MARGIN;
-        let y = area.position.y + area.size.height as i32 - size.height as i32;
-        window.set_position(PhysicalPosition::new(x, y))?;
-    }
-    window.show()
+        .build()
 }
 
 fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let menu = Menu::with_items(
-        app,
-        &[
-            &MenuItem::with_id(app, "toggle", "顯示／隱藏（Ctrl+Alt+H）", true, None::<&str>)?,
-            &PredefinedMenuItem::separator(app)?,
-            &MenuItem::with_id(app, "quit", "結束 DeskPet", true, None::<&str>)?,
-        ],
-    )?;
-    let mut tray = TrayIconBuilder::with_id("main")
+    let mut tray = TrayIconBuilder::with_id(TRAY)
         .tooltip("DeskPet")
-        .menu(&menu)
+        .menu(&ui::build_menu(app, true)?)
         .show_menu_on_left_click(false)
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
-                set_visible(tray.app_handle(), None);
+                ui::set_user_hidden(tray.app_handle(), None);
             }
         });
     if let Some(icon) = app.default_window_icon() {
@@ -181,31 +152,38 @@ fn run() -> Result<(), AnyError> {
         .with_shortcut(BOSS_KEY)?
         .with_handler(|app, _shortcut, event| {
             if event.state() == ShortcutState::Pressed {
-                set_visible(app, None);
+                ui::set_user_hidden(app, None);
             }
         })
         .build();
 
     tauri::Builder::default()
         // 必須最先註冊：重複開啟時，把已經在執行的寵物叫出來，這個新程式直接結束（§15.3）
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| set_visible(app, Some(true))))
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| ui::set_user_hidden(app, Some(false))))
         .plugin(shortcuts)
-        .invoke_handler(tauri::generate_handler![get_pet, start_drag, show_menu])
-        .on_menu_event(|app, event| match event.id().as_ref() {
-            "hide" => set_visible(app, Some(false)),
-            "toggle" => set_visible(app, None),
-            "quit" => app.exit(0),
-            _ => {}
+        .invoke_handler(tauri::generate_handler![get_pet, set_shape, start_drag, show_menu])
+        .on_menu_event(|app, event| ui::on_menu(app, event.id().as_ref()))
+        .on_window_event(|window, event| {
+            if let WindowEvent::Moved(position) = event
+                && window.label() == PET_WINDOW
+            {
+                ui::on_moved(window.app_handle(), *position);
+            }
         })
         .setup(move |app| {
             // 存檔鎖仍然保留：防止開發用的 deskpet-cli 同時寫入同一份存檔
             let (runtime, _startup) = Runtime::open(&data_dir.join("deskpet.db"))
                 .map_err(|e| format!("無法開啟存檔：{e}\n\n如果正在執行開發用的 deskpet-cli，請先關閉它。"))?;
-            let shared = Arc::new(Mutex::new(runtime));
-            let engine = Arc::clone(&shared);
-            app.manage(Shared(shared));
-            create_pet_window(app.handle(), &data_dir)?;
+            let settings = Ui::load(&runtime);
+            let scale = settings.effective_scale();
+            let runtime = Arc::new(Mutex::new(runtime));
+            let engine = Arc::clone(&runtime);
+            app.manage(AppState { runtime, ui: Mutex::new(settings) });
+
+            let window = create_pet_window(app.handle(), &data_dir, scale)?;
+            ui::show_initially(app.handle(), &window);
             create_tray(app.handle())?;
+            ui::spawn_watcher(app.handle().clone())?;
             std::thread::Builder::new().name("deskpet-engine".into()).spawn(move || {
                 if let Err(e) = run_loop(&engine, |_, _| true) {
                     eprintln!("引擎停止：{e}");
