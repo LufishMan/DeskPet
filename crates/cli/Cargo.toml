@@ -8,5 +8,6 @@ publish.workspace = true
 
 [dependencies]
 deskpet-core.workspace = true
+deskpet-runtime.workspace = true
 deskpet-store.workspace = true
 deskpet-sys.workspace = true

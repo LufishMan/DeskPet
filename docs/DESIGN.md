@@ -1,6 +1,6 @@
 # 桌面電子寵物：設計文件 v0.7
 
-> 狀態：M1 完成，準備進入 M2・更新日期：2026-10-16
+> 狀態：M1 完成、M2 首版完成（寵物視窗、系統匣、老闆鍵、程序化精靈圖）・更新日期：2026-10-16
 >
 > **v0.7 變更摘要**：**原始碼公開供檢視**（github.com/LufishMan/DeskPet），目的是讓 IT 和任何人都能審閱程式實際做了什麼；**不採用開源授權**，保留所有權利。同一個 repo 的 Releases 作為官方發佈管道（§14、§15）。
 >
@@ -30,7 +30,7 @@
 
 ## 1. 產品原則
 1. **安靜陪伴**：預設不出聲、不彈窗、不搶焦點。
-2. **輕量**：目標是自身 CPU 平均 < 1%（含 WebView 子程序）；記憶體主程序 < 40 MB、含 WebView 子程序合計 < 150 MB（工作集），以免干擾自己的數值。量測方式見 §2。
+2. **輕量**：目標是自身 CPU 平均 < 1%（含 WebView 子程序）；記憶體主程序 < 40 MB、含 WebView 子程序的**私有記憶體**合計 < 150 MB，以免干擾自己的數值。不用工作集加總，因為多個 WebView 程序的共用 DLL 會被重複計算。量測方式見 §2。M2 實測（Windows 11，12 核心）：CPU 0.05%、私有記憶體合計約 97 MB（主程序 4.6 MB）。
 3. **隱私**：所有資料都存在本機，不連網。只讀取整體 CPU 和記憶體數值，**不讀取程序名稱、視窗內容、鍵盤輸入，也不讀取全域滑鼠位置**；只處理使用者在寵物或玩具視窗上的點擊、拖曳和游標停留。
 4. **隱藏機制**：品種判定、體型分數、性格這類數值都不直接顯示，讓玩家自己觀察和摸索。
 5. **最小權限、不觸碰其他程式、看起來就是普通軟體**：任何平台都不需要管理員或特殊權限，不改動其他程式或視窗，也不做任何容易被誤認為惡意程式的行為。細節見 §14。
@@ -57,7 +57,8 @@
 | 記憶體壓力 | macOS：memory pressure（`kern.memorystatus_vm_pressure_level`）；Win：`GlobalMemoryStatusEx.dwMemoryLoad`＋分頁檔使用量；Linux：`/proc/pressure/memory`（PSI）或 MemAvailable |
 | 自身用量 | Win：啟動時建立 Job Object 並把自己加入，WebView2 子程序會自動歸入同一個 Job；用 `QueryInformationJobObject(JobObjectBasicAccountingInformation)` 取得**本程式全部程序**的 CPU 時間，不需要列舉或開啟其他程序。macOS / Linux：只扣主程序（WebView 程序不是子程序），誤差靠低幀率控制 |
 | 存檔 | SQLite（`rusqlite`，bundled），每個 tick 寫入一次，查詢一律參數化。路徑**明確指定**為 §14.5 B 的資料夾，不使用 Tauri 預設的 identifier 路徑；WebView2 的使用者資料夾也指定到 `%LOCALAPPDATA%\DeskPet\WebView2\` |
-| 前端 | 原生 TypeScript + Vite，**不用 UI 框架、不用 PixiJS**（WebGL 會拉高 GPU 程序用量，也多一個相依套件）。Canvas 2D 繪製：動作中 10 fps、待機 4 fps，視窗隱藏時完全停止繪製 |
+| 前端 | 原生 TypeScript + Vite，**不用 UI 框架、不用 PixiJS**（WebGL 會拉高 GPU 程序用量，也多一個相依套件）。Canvas 2D 繪製：動作中 10 fps、待機 4 fps，視窗隱藏時完全停止繪製。前端每 15 秒用自訂指令 `get_pet` 讀取狀態，不使用事件 API |
+| WebView2 參數 | 讓所有主機名稱解析失敗（`--host-resolver-rules="MAP * ~NOTFOUND"`），並把對外連線導向不存在的本機 proxy（`--proxy-server=127.0.0.1:9`）；關閉背景連線、元件更新、同步、SmartScreen、DNS over HTTPS、GPU 加速。**原因**：M2 實測發現，只關背景服務時 WebView2 仍會連到 Microsoft 端點和 `dns.google`（DNS over HTTPS 探測）；改成網路層封鎖後，45 秒內對外連線為 0。頁面和 IPC 由 WebView2 內部攔截處理，不受影響 |
 | 視窗 | **和寵物同尺寸的小視窗**，寵物移動時移動整個視窗；透明、無邊框、永遠置頂。邏輯畫布 40×44（寵物 32×32 置底置中，上方留圖示泡泡的空間），依縮放倍率 ×2～×4。玩具和倉鼠囤糧各自使用一個獨立小視窗，**同時最多 3 個小視窗**。**不使用全螢幕透明覆蓋層** |
 
 ## 3. 蛋與品種
@@ -334,7 +335,7 @@
 | 動畫狀態 | idle、walk、sleep、eat、happy、stressed、sad、tired、interact、evolve |
 | 體型精靈圖 | 3 組（瘦、標準、胖）；很瘦和很胖用局部差異呈現，例如肋骨線、雙下巴 |
 | 美術量估算 | 18 品種 × 3 階段 × 3 體型 × 約 10 動作。降低工作量的做法：同一科共用骨架和動作，品種只換色盤和部件（耳朵、尾巴、花紋） |
-| 製作方式 | 像素圖用**文字格式**定義（每個字元代表色盤索引 0～4），放在版本控制中。執行期把「科別骨架 × 體型 × 動作影格」和「品種部件」疊圖，再套上品種色盤和毛色偏移。不使用外部美術檔或圖片載入函式庫 |
+| 製作方式 | **程序化產生**（`app/src/sprite.ts`）：頭、身體、耳朵、尾巴用橢圓與三角形組成，每個部位各自加 1 像素外框後再疊圖，輸出色盤索引格（0～4），再套上品種色盤和毛色偏移。科別決定骨架（耳型、尾巴），品種決定色盤、花紋和耳型，體型與成長階段都只是參數，所以「3 階段 × 5 體型 × 各動作」不需要逐張繪製。之後若要手工修飾，可以用文字格式覆寫個別部位。`npm run preview-sprites` 會輸出整張預覽表，程式圖示也由同一個產生器產生。不使用外部美術檔或圖片載入函式庫 |
 | 玩具與圖示 | 玩具 16×16；圖示泡泡 8×8 |
 
 ## 12. 傳承機制
@@ -414,7 +415,7 @@ Settings   { scale, boss_key, focus_mode, autostart(預設 false),
 | 全螢幕偵測 | `SHQueryUserNotificationState` | 不需要（全螢幕 App 位在獨立桌面空間） | 否 |
 | 老闆鍵 | `RegisterHotKey` | Carbon `RegisterEventHotKey` | 否（**不使用鍵盤 hook**，所以 macOS 不需要輔助使用權限） |
 | 開機自動啟動（選用，預設關閉） | `HKCU\...\Run` | `SMAppService` | 否 |
-| 網路 | 不使用 | 不使用 | — |
+| 網路 | 不使用；WebView2 也以啟動參數在網路層封鎖（§2） | 不使用 | — |
 
 **刻意不做的事**：移動或改變其他視窗、讀取視窗標題或內容、監聽鍵盤滑鼠、讀取全域游標位置、截圖、列舉其他程序、存取網路。
 
@@ -434,7 +435,8 @@ Settings   { scale, boss_key, focus_mode, autostart(預設 false),
 | R11 | 使用者改系統時間作弊 | 中 | 極低 | 單機遊戲，影響只有自己；偵測到時間倒退時，該段時間不結算就好 | 可接受 |
 
 ### 14.4 開發階段的資安檢查表
-- [ ] Tauri capabilities 只開放自訂指令，所有指令都在後端驗證參數。
+- [x] Tauri capabilities 只開放自訂指令（`get_pet`、`start_drag`、`show_menu`），不開放任何核心或外掛 API；三個指令都不接受參數。
+- [x] WebView2 對外連線實測為 0（M2，45 秒觀察）。每次升級 Tauri／WebView2 後要重新確認。
 - [ ] CSP 嚴格設定；不使用 `eval`，不載入遠端腳本。
 - [ ] Windows 連結參數 `/DEPENDENTLOADFLAG:0x800`，啟動時設定 DLL 搜尋路徑。
 - [ ] 確認不列舉其他程序、不讀取視窗標題、不使用輸入 hook、不呼叫 `GetCursorPos`。
@@ -535,7 +537,9 @@ Settings   { scale, boss_key, focus_mode, autostart(預設 false),
 | `crates/store` | SQLite 存檔、schema 遷移、JSON 匯出入 |
 | `crates/sim` | 時間加速模擬器（CLI），讀取 `balance.toml` 與情境設定，輸出各階段日期和體型變化 |
 | `crates/cli` | 開發用命令列（不隨正式版發佈）：不開視窗執行引擎、收集真實數據、產生校準報表 |
-| `app/` | Tauri 2 應用程式和前端（M2 起） |
+| `crates/runtime` | 執行期主迴圈（取樣、結算、存檔、睡眠／喚醒、每日維護），CLI 和桌面程式共用 |
+| `app/` | 前端（TypeScript + Vite，Canvas 2D） |
+| `app/src-tauri` | Tauri 2 桌面程式：寵物視窗、系統匣、老闆鍵、右鍵選單 |
 | `docs/` | 本文件 |
 | M3 蛋的生成 | 程序化蛋紋、5 科 18 品種、孵化 | — |
 | M4 個性與互動 | 性格軸、癖好、§9.8 首批互動、休息提醒 | 視窗資訊只讀取位置和大小 |

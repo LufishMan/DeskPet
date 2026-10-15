@@ -6,23 +6,17 @@
 //!
 //! 報表會顯示隱藏數值（體型、熱量等），只供開發校準使用。
 
-use std::error::Error;
-use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::mpsc::RecvTimeoutError;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::sync::{Arc, Mutex};
 
 use deskpet_core::calendar::civil_from_days;
-use deskpet_core::rng::Rng;
-use deskpet_core::{
-    Balance, BodyType, Event, LegacyChoice, MoodEngine, MoodLevel, Pet, Sample, SampleOutcome, Stage, TickAccumulator,
-    TickInput,
-};
-use deskpet_store::{LineageRef, Store, TickRecord};
-use deskpet_sys::{PowerEvent, SelfCpuSource, SystemSampler, local_now, memory, unix_now};
+use deskpet_core::{Balance, BodyType, Event, LegacyChoice, MoodLevel, Pet, Stage};
+use deskpet_runtime::{AnyError, Runtime, Update, random_seed, run_loop};
+use deskpet_store::Store;
+use deskpet_sys::{SelfCpuSource, local_now, unix_now};
 
-type AnyResult<T> = Result<T, Box<dyn Error>>;
+type AnyResult<T> = Result<T, AnyError>;
 
 fn main() -> ExitCode {
     // 動態載入 DLL 只搜尋 System32（§14.3 R4），越早越好
@@ -57,21 +51,7 @@ fn db_path(args: &[String]) -> AnyResult<PathBuf> {
     if let Some(i) = args.iter().position(|a| a == "--db") {
         return args.get(i + 1).map(PathBuf::from).ok_or_else(|| "--db 需要一個路徑".into());
     }
-    Ok(deskpet_sys::data_dir().ok_or("找不到使用者資料夾")?.join("deskpet.db"))
-}
-
-/// 單一執行個體鎖（§15.3）：同一份存檔只能有一個程式寫入
-fn acquire_lock(db: &Path) -> AnyResult<File> {
-    let dir = db.parent().ok_or("存檔路徑沒有上層資料夾")?;
-    std::fs::create_dir_all(dir)?;
-    let file = File::create(dir.join("deskpet.lock"))?;
-    file.try_lock().map_err(|_| "已經有另一個 DeskPet 在使用這份存檔")?;
-    Ok(file)
-}
-
-fn random_seed() -> u64 {
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_nanos() as u64);
-    Rng::new(nanos ^ (u64::from(std::process::id()) << 32)).next_u64()
+    Ok(deskpet_runtime::default_db_path().ok_or("找不到使用者資料夾")?)
 }
 
 fn clock(minute: u32) -> String {
@@ -135,147 +115,59 @@ fn print_events(events: &[Event], time: &str) {
 }
 
 fn run(db: &Path, hardened: bool) -> AnyResult<()> {
-    let _lock = acquire_lock(db)?;
-    let balance = Balance::default();
-    let mut store = Store::open(db)?;
-    let backups = db.parent().ok_or("存檔路徑沒有上層資料夾")?.join("backups");
-
+    let (runtime, startup) = Runtime::open(db)?;
     let local = local_now();
-    let now = unix_now();
-    let (mut pet_id, mut pet) = match store.active_pet()? {
-        Some(found) => found,
-        None => {
-            let pet = Pet::new_egg(&balance, random_seed(), None, 1, now, local.day);
-            let id = store.create_pet(&pet, LineageRef::New, None)?;
-            println!("撿到一顆新的蛋。");
-            (id, pet)
-        }
-    };
-    let events = pet.catch_up(&balance, now, local.day);
-    store.save_pet(pet_id, &pet)?;
-    print_events(&events, &clock(local.minute));
+    if startup.new_egg {
+        println!("撿到一顆新的蛋。");
+    }
+    print_events(&startup.events, &clock(local.minute));
 
-    let mut sampler = SystemSampler::new();
-    let source = match sampler.self_cpu_source() {
+    let source = match startup.self_cpu {
         SelfCpuSource::Job => "Job Object（含子程序）",
         SelfCpuSource::Process => "只有主程序",
         SelfCpuSource::Unsupported => "此平台尚未支援",
     };
-    let power = deskpet_sys::subscribe_power();
     println!("存檔：{}", db.display());
+    println!("DLL 搜尋路徑限制：{}・本程式 CPU 來源：{source}", if hardened { "已啟用" } else { "失敗" });
+    let balance = runtime.balance();
+    println!("{}", describe(runtime.pet(), balance));
     println!(
-        "DLL 搜尋路徑限制：{}・本程式 CPU 來源：{source}・休眠通知：{}",
-        if hardened { "已啟用" } else { "失敗" },
-        if power.is_some() { "已訂閱" } else { "無（只用時間差偵測）" }
+        "每 {} 秒取樣、每 {} 分鐘結算一次。按 Ctrl+C 結束（狀態每個 tick 都已存檔）。",
+        balance.tick.sample_seconds, balance.tick.minutes
     );
-    println!("{}", describe(&pet, &balance));
-    println!("每 {} 秒取樣、每 {} 分鐘結算一次。按 Ctrl+C 結束（狀態每個 tick 都已存檔）。", balance.tick.sample_seconds, balance.tick.minutes);
 
-    let interval = Duration::from_secs(u64::from(balance.tick.sample_seconds));
-    let mut accumulator = TickAccumulator::new(&balance);
-    let mut mood = MoodEngine::default();
-    let mut last_sample: Option<i64> = None;
-    let mut maintained_day = None;
-    let mut next = Instant::now() + interval;
-
-    loop {
-        // 等到下一次取樣；期間若收到睡眠 / 喚醒通知就先處理
-        loop {
-            let timeout = next.saturating_duration_since(Instant::now());
-            let received = match &power {
-                Some((_, rx)) => rx.recv_timeout(timeout),
-                None => {
-                    std::thread::sleep(timeout);
-                    Err(RecvTimeoutError::Timeout)
-                }
-            };
-            match received {
-                Ok(PowerEvent::Suspend) => {
-                    accumulator.reset();
-                    println!("[{}] 電腦即將休眠，捨棄未完成的 tick", clock(local_now().minute));
-                }
-                Ok(PowerEvent::Resume) => {
-                    let local = local_now();
-                    println!("[{}] 電腦從休眠喚醒", clock(local.minute));
-                    let events = pet.catch_up(&balance, unix_now(), local.day);
-                    store.save_pet(pet_id, &pet)?;
-                    print_events(&events, &clock(local.minute));
-                }
-                Err(RecvTimeoutError::Timeout) => break,
-                Err(RecvTimeoutError::Disconnected) => {
-                    std::thread::sleep(timeout);
-                    break;
-                }
-            }
-        }
-        next += interval;
-        if next < Instant::now() {
-            next = Instant::now() + interval;
-        }
-
-        let Some(cpu) = sampler.sample_cpu() else { continue };
-        let now = unix_now();
-        let pressure = memory().map_or(0.0, |m| m.pressure());
-        let dt = last_sample.map_or(f64::from(balance.tick.sample_seconds), |t| (now - t) as f64);
-        last_sample = Some(now);
-        mood.sample(&balance, pressure, dt);
-
-        let sample = Sample { now, cpu_percent: cpu.adjusted(), self_percent: cpu.self_percent, pressure };
-        match accumulator.push(&sample) {
-            SampleOutcome::Pending => {}
-            SampleOutcome::Gap { last, now } => {
-                println!("[{}] 偵測到 {} 秒的空檔（休眠），捨棄未完成的 tick", clock(local_now().minute), now - last);
-            }
-            SampleOutcome::Tick(tick) => {
-                let local = local_now();
-                let level = mood.level(&balance);
-                let before = pet.total_calories;
-                let input = TickInput { now: tick.end, day: local.day, cpu_percent: tick.cpu_avg, mood: level };
-                let events = pet.tick(&balance, &input);
-                let calories = pet.total_calories - before;
-                let record = TickRecord {
-                    ts: tick.end,
-                    day: local.day,
-                    cpu_avg: tick.cpu_avg,
-                    self_cpu: tick.self_avg,
-                    mem_pressure: tick.pressure_avg,
-                    calories,
-                    counted: calories > 0.0,
-                };
-                store.record_tick(pet_id, &pet, &record, &events)?;
-                let time = clock(local.minute);
+    let runtime = Arc::new(Mutex::new(runtime));
+    run_loop(&runtime, |rt, update| {
+        let local = local_now();
+        let time = clock(local.minute);
+        match update {
+            Update::Tick { summary, mood, calories, events, compacted, backup } => {
                 println!(
                     "[{time}] CPU {:5.1}%（本程式 {:.2}%）・記憶體壓力 {:.2}・心情 {}・+{calories:.1} 熱量 → {}",
-                    tick.cpu_avg,
-                    tick.self_avg,
-                    tick.pressure_avg,
-                    level.name(),
-                    describe(&pet, &balance)
+                    summary.cpu_avg,
+                    summary.self_avg,
+                    summary.pressure_avg,
+                    mood.name(),
+                    describe(rt.pet(), rt.balance())
                 );
                 print_events(&events, &time);
-
-                // 每天一次：彙總舊明細、備份
-                if maintained_day != Some(local.day) {
-                    maintained_day = Some(local.day);
-                    let removed = store.compact(local.day)?;
-                    if removed > 0 {
-                        println!("[{time}] 已把 {removed} 筆超過 30 天的明細彙總成每日統計");
-                    }
-                    if let Some(path) = store.backup(&backups, local.day)? {
-                        println!("[{time}] 已備份到 {}", path.display());
-                    }
+                if compacted > 0 {
+                    println!("[{time}] 已把 {compacted} 筆超過 30 天的明細彙總成每日統計");
+                }
+                if let Some(path) = backup {
+                    println!("[{time}] 已備份到 {}", path.display());
                 }
             }
+            Update::Gap { seconds } => println!("[{time}] 偵測到 {seconds} 秒的空檔（休眠），捨棄未完成的 tick"),
+            Update::Suspending => println!("[{time}] 電腦即將休眠，捨棄未完成的 tick"),
+            Update::Resumed { events } => {
+                println!("[{time}] 電腦從休眠喚醒");
+                print_events(&events, &time);
+            }
+            Update::Replaced => println!("[{time}] 偵測到傳承，改為照顧新的蛋：{}", describe(rt.pet(), rt.balance())),
         }
-        // 傳承由另一個指令處理；這裡只在存檔已被換掉時跟上
-        if pet.legacy_ready
-            && let Some((id, latest)) = store.active_pet()?
-            && id != pet_id
-        {
-            println!("偵測到傳承，改為照顧新的蛋。");
-            (pet_id, pet) = (id, latest);
-        }
-    }
+        true
+    })
 }
 
 fn legacy(db: &Path, choice: Option<&str>) -> AnyResult<()> {

@@ -2,9 +2,12 @@
 //!
 //! 壓力指數（0～1）由平台層換算，這裡只負責平滑和分級。
 
+use serde::{Deserialize, Serialize};
+
 use crate::balance::Balance;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MoodLevel {
     Happy,
     Normal,

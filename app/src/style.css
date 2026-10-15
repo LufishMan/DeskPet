@@ -1,0 +1,17 @@
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  user-select: none;
+}
+
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  /* 整數倍放大、nearest-neighbor（§11.2） */
+  image-rendering: pixelated;
+}

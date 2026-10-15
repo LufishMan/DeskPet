@@ -1,0 +1,12 @@
+[package]
+name = "deskpet-runtime"
+description = "DeskPet 執行期：把取樣、結算、存檔串成主迴圈，CLI 和桌面程式共用"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+deskpet-core.workspace = true
+deskpet-store.workspace = true
+deskpet-sys.workspace = true

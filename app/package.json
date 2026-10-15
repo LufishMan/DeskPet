@@ -1,0 +1,20 @@
+{
+  "name": "deskpet-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "tauri": "tauri",
+    "preview-sprites": "node --experimental-strip-types scripts/preview.ts"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "2.11.1"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "2.12.1",
+    "typescript": "5.9.3",
+    "vite": "6.4.3"
+  }
+}
