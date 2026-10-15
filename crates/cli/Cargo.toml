@@ -1,0 +1,12 @@
+[package]
+name = "deskpet-cli"
+description = "DeskPet 開發用命令列：不開視窗執行引擎、收集數據、產生校準報表"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+deskpet-core.workspace = true
+deskpet-store.workspace = true
+deskpet-sys.workspace = true

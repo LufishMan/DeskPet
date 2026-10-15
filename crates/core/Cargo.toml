@@ -1,0 +1,11 @@
+[package]
+name = "deskpet-core"
+description = "DeskPet 核心邏輯：養分、成長、體型、活力、心情（不碰作業系統）"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true

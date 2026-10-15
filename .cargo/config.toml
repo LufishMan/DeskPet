@@ -1,0 +1,8 @@
+# 注意：cargo 依「目前所在的資料夾」尋找這個檔案，請在專案根目錄執行 cargo。
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    # 靜態連結 C 執行階段：免安裝版不依賴 VCRUNTIME140.dll（§15.1），也少一個可被劫持的 DLL
+    "-C", "target-feature=+crt-static",
+    # §14.3 R4：靜態匯入的 DLL 也只從 System32 載入
+    "-C", "link-arg=/DEPENDENTLOADFLAG:0x800",
+]

@@ -1,0 +1,72 @@
+# DeskPet 平衡數值（DESIGN.md §4～§7）。
+# 修改後執行 `cargo run -p deskpet-sim` 驗證成長節奏。
+
+[tick]
+minutes = 5          # 一個 tick 的長度
+sample_seconds = 10  # CPU / 記憶體取樣間隔
+
+[calories]
+standard_rate = 5.0  # 標準速率（熱量 / tick），用來算檢查點的預期 tick 數
+daily_cap = 720.0    # 每日上限；達到後「吃飽睡覺」，不結算也不計入體型
+
+# CPU 平均（已扣除本程式）低於 cpu_below 時，每個 tick 得到 calories
+[[calories.bands]]
+cpu_below = 5.0
+calories = 2.0
+
+[[calories.bands]]
+cpu_below = 15.0
+calories = 4.0
+
+[[calories.bands]]
+cpu_below = 35.0
+calories = 6.0
+
+[[calories.bands]]
+cpu_below = 65.0
+calories = 8.0
+
+[[calories.bands]]
+cpu_below = 101.0
+calories = 10.0
+
+# 依序為：蛋 → 幼年、幼年 → 少年、少年 → 成年、成年 → 傳承
+[[stages]]
+calories = 2400.0
+min_days = 7
+
+[[stages]]
+calories = 3600.0
+min_days = 7
+
+[[stages]]
+calories = 4800.0
+min_days = 10
+
+[[stages]]
+calories = 4800.0
+min_days = 14
+
+# 閒置小睡：CPU 連續 after_ticks 個 tick 低於 idle_cpu_below 後，
+# 之後的閒置 tick 不結算熱量、不計入體型（仍算活躍）
+[nap]
+idle_cpu_below = 5.0
+after_ticks = 12
+
+[body]
+weights = [1, 1, 2, 3]                   # 最近 4 個檢查點 ratio 的權重，舊 → 新
+ratio_bounds = [0.70, 0.85, 1.20, 1.50]  # 加權平均 ratio 的分界：很胖｜胖｜標準｜瘦｜很瘦
+max_hunger_penalty = 4
+
+[energy]
+max = 5
+grace_days = 4               # 連續不活躍幾天內不受影響
+penalty_every_days = 2       # 超過寬限後，每幾天飢餓扣分 +1
+low_threshold = 2            # 活力小於等於此值時套用 low_multiplier
+low_multiplier = 0.8
+active_day_min_ticks = 12    # 一天至少幾個活躍 tick 才算活躍日
+
+[mood]
+ema_minutes = 10.0
+pressure_bounds = [0.35, 0.65, 0.85]  # 愉悅／普通、普通／緊張、緊張／沮喪（待實測校準）
+multipliers = [1.1, 1.0, 0.9, 0.75]   # 愉悅、普通、緊張、沮喪
