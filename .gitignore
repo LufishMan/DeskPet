@@ -1,6 +1,41 @@
-/target
+# ── 建置產物 ──
+# 任何層級的 target/（含之後 Tauri 的 app/src-tauri/target）
+target/
 node_modules/
 dist/
+*.exe
+*.pdb
+*.msi
+*.zip
+
+# ── 存檔與執行期資料：含個人使用紀錄，絕對不上傳 ──
 *.db
 *.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+deskpet.lock
+backups/
+*.csv
+*.log
+
+# ── 金鑰、憑證、環境變數：絕對不上傳 ──
+# minisign 私鑰預設叫 minisign.key；公鑰 *.pub 可以公開
+*.key
+*.pem
+*.pfx
+*.p12
+.env
+.env.*
+
+# ── 本機工具與編輯器設定 ──
+.claude/settings.local.json
+.idea/
+.vscode/
+*.swp
+
+# ── 作業系統產生的檔案 ──
 .DS_Store
+Thumbs.db
+desktop.ini
