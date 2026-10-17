@@ -1,11 +1,11 @@
 // 寵物視窗：繪製、動畫、互動（DESIGN.md §7、§9.1、§9.2）。
-// 只呼叫本程式的自訂指令：get_pet、start_drag、show_menu。
+// 只呼叫本程式的自訂指令：get_pet、set_shape、start_drag、show_menu。
 
 import { invoke } from '@tauri-apps/api/core';
 
 import type { BubbleKind } from './bubbles.ts';
 import { H, W, renderScene, shapeOf, type Scene } from './render.ts';
-import type { PetView, Pose } from './types.ts';
+import type { PetView, Pose, Stage } from './types.ts';
 
 const canvas = document.getElementById('pet') as HTMLCanvasElement;
 canvas.width = W;
@@ -40,6 +40,10 @@ const IDLE_FRAME_MS = 250;
 const ACTIVE_FRAME_MS = 100;
 const DRAG_THRESHOLD_PX = 3;
 const MULTI_CLICK_MS = 450;
+/** 孵化與長大的動畫長度（§11.2 evolve） */
+const HATCH_MS = 3200;
+const EVOLVE_MS = 1800;
+const STAGE_ORDER: readonly Stage[] = ['egg', 'baby', 'juvenile', 'adult'];
 
 let view: PetView | null = null;
 
@@ -57,10 +61,26 @@ let blinkUntil = 0;
 let nextBlink = 0;
 let clicks: number[] = [];
 let timer: number | undefined;
+let hatchAt = -Infinity;
+let evolveAt = -Infinity;
+
+/** 階段改變時播放動畫。程式關著的時候長大就不播（重新開啟時沒有上一個階段可比） */
+function onStageChange(prev: Stage, next: Stage): void {
+  const now = performance.now();
+  if (prev === 'egg') {
+    hatchAt = now;
+  } else if (STAGE_ORDER.indexOf(next) > STAGE_ORDER.indexOf(prev)) {
+    evolveAt = now;
+    react({ pose: 'happy', hop: true, bubble: null, wobble: false }, EVOLVE_MS);
+  }
+}
 
 async function refresh(): Promise<void> {
   try {
-    view = await invoke<PetView>('get_pet');
+    const next = await invoke<PetView>('get_pet');
+    const prev = view?.stage;
+    view = next;
+    if (prev !== undefined && prev !== next.stage) onStageChange(prev, next.stage);
     schedule(0);
   } catch (error) {
     console.error('讀取寵物狀態失敗', error);
@@ -102,6 +122,8 @@ function draw(now: number): boolean {
   else if (view.energy <= 2) pose = 'tired';
   if (pose === 'idle' && now < blinkUntil) pose = 'blink';
 
+  const hatching = now - hatchAt < HATCH_MS;
+  const evolving = now - evolveAt < EVOLVE_MS;
   const wobbling = view.stage === 'egg' && (view.waiting || active?.wobble === true);
   const scene: Scene = {
     view,
@@ -109,13 +131,15 @@ function draw(now: number): boolean {
     breathe: Math.floor(now / 1000) % 2 === 1,
     tail: [-1, 0, 1, 0][Math.floor(now / 600) % 4],
     hop: active?.hop === true && Math.floor(now / 150) % 2 === 0,
-    wobble: wobbling ? [-1, 0, 1, 0][Math.floor(now / 120) % 4] : 0,
-    bubble: active ? active.bubble : moodBubble(view, now),
+    wobble: hatching ? [-1, 0, 1, 0][Math.floor(now / 70) % 4] : wobbling ? [-1, 0, 1, 0][Math.floor(now / 120) % 4] : 0,
+    bubble: hatching ? null : active ? active.bubble : moodBubble(view, now),
+    hatch: hatching ? (now - hatchAt) / HATCH_MS : null,
+    sparkle: evolving ? (now - evolveAt) / EVOLVE_MS : null,
   };
   renderScene(image.data, scene);
   ctx.putImageData(image, 0, 0);
   updateShape(scene);
-  return active !== null || wobbling;
+  return active !== null || wobbling || hatching || evolving;
 }
 
 /** 形狀改變時才通知後端（點擊穿透透明區域） */

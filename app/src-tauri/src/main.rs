@@ -46,7 +46,9 @@ struct PetView {
     legacy_ready: bool,
     rare: bool,
     hue_shift: u8,
-    /// 蛋的熱量進度 0～1，只用來決定要不要畫裂痕
+    /// 蛋紋的排列種子：egg_seed 折成 32 位元，JavaScript 的數字才能精確表示
+    seed: u32,
+    /// 蛋的熱量進度 0～1，只用來畫裂痕（§11.1）
     egg_progress: f64,
     /// 專注模式：前端停止主動冒泡泡（§10）
     focus: bool,
@@ -73,6 +75,7 @@ fn get_pet(state: State<'_, AppState>) -> Result<PetView, String> {
         legacy_ready: pet.legacy_ready,
         rare: pet.rare,
         hue_shift: pet.hue_shift,
+        seed: (pet.egg_seed ^ (pet.egg_seed >> 32)) as u32,
         egg_progress: if pet.stage == Stage::Egg {
             pet.stage_calories / balance.stages[Stage::Egg.index()].calories
         } else {

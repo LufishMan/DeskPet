@@ -1,5 +1,6 @@
 // 把寵物精靈圖輸出成 PNG，方便檢查美術，也用來產生程式圖示。
 //   npm run preview-sprites -- <輸出.png>          整張預覽表
+//   npm run preview-sprites -- --hatch <輸出.png>  孵化動畫的分格
 //   npm run preview-sprites -- --icon <輸出.png>   1024×1024 圖示原圖
 
 import { writeFileSync } from 'node:fs';
@@ -49,6 +50,7 @@ function view(family: Family, species: string, stage: Stage, body: Body = 'stand
     legacy_ready: false,
     rare: false,
     hue_shift: 128,
+    seed: 1,
     egg_progress: 0,
     focus: false,
     ...extra,
@@ -56,7 +58,7 @@ function view(family: Family, species: string, stage: Stage, body: Body = 'stand
 }
 
 function scene(v: PetView, pose: Pose = 'idle', bubble: BubbleKind | null = null, hop = false): Scene {
-  return { view: v, pose, breathe: false, tail: 0, hop, wobble: 0, bubble };
+  return { view: v, pose, breathe: false, tail: 0, hop, wobble: 0, bubble, hatch: null, sparkle: null };
 }
 
 function frame(s: Scene): Uint8ClampedArray {
@@ -87,10 +89,15 @@ if (args[0] === '--icon') {
 const SPECIES: [Family, string][] = [
   ['cat', 'tabby_mix'],
   ['cat', 'british_shorthair'],
-  ['cat', 'siamese'],
+  ['cat', 'american_shorthair'],
   ['cat', 'ragdoll'],
+  ['cat', 'siamese'],
+  ['cat', 'persian'],
+  ['dog', 'taiwan_dog_mix'],
   ['dog', 'shiba'],
+  ['dog', 'corgi'],
   ['dog', 'golden_retriever'],
+  ['dog', 'poodle'],
   ['dog', 'husky'],
   ['mouse', 'white_mouse'],
   ['mouse', 'fancy_rat'],
@@ -101,20 +108,40 @@ const SPECIES: [Family, string][] = [
 ];
 const BODIES: Body[] = ['very_thin', 'thin', 'standard', 'fat', 'very_fat'];
 
-const rows: Scene[][] = SPECIES.map(([family, species]) => [
-  scene(view(family, species, 'egg')),
-  scene(view(family, species, 'egg', 'standard', { egg_progress: 0.8 })),
-  scene(view(family, species, 'baby')),
-  scene(view(family, species, 'juvenile')),
-  ...BODIES.map((b) => scene(view(family, species, 'adult', b))),
-  scene(view(family, species, 'adult'), 'look'),
-  scene(view(family, species, 'adult'), 'happy', 'heart', true),
-  scene(view(family, species, 'adult', 'standard', { sleeping: true }), 'sleep', 'zzz'),
-  scene(view(family, species, 'adult', 'standard', { mood: 'tense' }), 'idle', 'sweat'),
-  scene(view(family, species, 'adult', 'standard', { rare: true, hue_shift: SPECIES.length }), 'idle'),
-]);
+let rows: Scene[][];
+let out = args[0] ?? 'sprites.png';
+let scaleArg = args[1];
 
-const scale = Number(args[1] ?? 3);
+if (args[0] === '--hatch') {
+  // 每個科一列，從蛋到幼體
+  out = args[1] ?? 'hatch.png';
+  scaleArg = args[2];
+  const steps = [0, 0.15, 0.3, 0.45, 0.52, 0.58, 0.64, 0.7, 0.78, 0.86, 0.94, 1];
+  rows = SPECIES.filter((_, i) => [0, 7, 12, 14, 16].includes(i)).map(([family, species]) =>
+    steps.map((t, i) => ({ ...scene(view(family, species, 'baby')), hatch: t, wobble: t < 0.5 ? [-1, 0, 1, 0][i % 4] : 0 })),
+  );
+} else {
+  rows = SPECIES.map(([family, species]) => [
+    // 同品種三顆不同的蛋（種子與色相偏移不同），再加上裂痕的兩個程度
+    scene(view(family, species, 'egg', 'standard', { seed: 1, hue_shift: 128 })),
+    scene(view(family, species, 'egg', 'standard', { seed: 77, hue_shift: 30 })),
+    scene(view(family, species, 'egg', 'standard', { seed: 4242, hue_shift: 220 })),
+    scene(view(family, species, 'egg', 'standard', { egg_progress: 0.8 })),
+    scene(view(family, species, 'egg', 'standard', { egg_progress: 1 })),
+    scene(view(family, species, 'baby')),
+    scene(view(family, species, 'juvenile')),
+    ...BODIES.map((b) => scene(view(family, species, 'adult', b))),
+    scene(view(family, species, 'adult'), 'look'),
+    scene(view(family, species, 'adult'), 'happy', 'heart', true),
+    scene(view(family, species, 'adult', 'standard', { sleeping: true }), 'sleep', 'zzz'),
+    scene(view(family, species, 'adult', 'standard', { mood: 'tense' }), 'idle', 'sweat'),
+    scene(view(family, species, 'egg', 'standard', { rare: true, hue_shift: 0 })),
+    scene(view(family, species, 'adult', 'standard', { rare: true, hue_shift: 0 })),
+    scene(view(family, species, 'adult', 'standard', { rare: true, hue_shift: 1 })),
+  ]);
+}
+
+const scale = Number(scaleArg ?? 3);
 const cellW = (W + 2) * scale;
 const cellH = (H + 2) * scale;
 const cols = rows[0].length;
@@ -138,5 +165,5 @@ rows.forEach((row, r) =>
     }
   }),
 );
-writeFileSync(args[0] ?? 'sprites.png', png(sheetW, sheetH, sheet));
+writeFileSync(out, png(sheetW, sheetH, sheet));
 console.log(`已輸出 ${rows.length}×${cols} 張精靈圖`);
