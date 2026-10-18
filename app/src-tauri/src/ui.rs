@@ -12,18 +12,19 @@ use crate::shape;
 
 pub const PET_WINDOW: &str = "pet";
 pub const TRAY: &str = "main";
-/// 邏輯畫布 40×44（§2）
-const CANVAS: (f64, f64) = (40.0, 44.0);
+/// 邏輯畫布 100×100（§2）
+const CANVAS: (f64, f64) = (shape::COLS as f64, shape::ROWS as f64);
 /// 整數倍放大（§11.2）
-const SCALES: [u8; 3] = [2, 3, 4];
-const DEFAULT_SCALE: u8 = 3;
+const SCALES: [u8; 3] = [1, 2, 3];
+const DEFAULT_SCALE: u8 = 2;
 /// 專注模式：縮小並放到角落（§10）
-const FOCUS_SCALE: u8 = 2;
+const FOCUS_SCALE: u8 = 1;
 const SCREEN_MARGIN: i32 = 24;
 /// 全螢幕偵測與位置存檔的間隔
 const WATCH_INTERVAL: Duration = Duration::from_secs(2);
 
-const KEY_SCALE: &str = "scale";
+/// 畫布從 40×44 改成 100×100 後倍率的意義不同，換一個鍵，不沿用舊的設定值
+const KEY_SCALE: &str = "display_scale";
 const KEY_FOCUS: &str = "focus_mode";
 const KEY_POSITION: &str = "window_position";
 
@@ -40,7 +41,7 @@ pub struct Ui {
     /// 全螢幕或簡報時自動隱藏
     auto_hidden: bool,
     /// 前端最近一次送來的形狀，改變大小時要重新套用
-    shape: Option<Vec<u64>>,
+    shape: Option<Vec<u128>>,
     /// 拖曳後還沒寫進存檔的位置
     pending_position: Option<(i32, i32)>,
 }
@@ -162,8 +163,8 @@ pub fn set_user_hidden(app: &AppHandle, hidden: Option<bool>) {
     apply_visibility(app);
 }
 
-pub fn set_shape(app: &AppHandle, window: &WebviewWindow, rows: Vec<u64>) -> Result<(), String> {
-    shape::validate(&rows)?;
+pub fn set_shape(app: &AppHandle, window: &WebviewWindow, spans: &[u16]) -> Result<(), String> {
+    let rows = shape::parse(spans)?;
     let px = {
         let mut ui = ui(app);
         ui.shape = Some(rows.clone());
@@ -280,9 +281,9 @@ pub fn build_menu(app: &AppHandle, for_tray: bool) -> tauri::Result<Menu<Wry>> {
         "大小",
         !focus,
         &[
-            &CheckMenuItem::with_id(app, "scale-2", "小", true, scale == 2, None::<&str>)?,
-            &CheckMenuItem::with_id(app, "scale-3", "中", true, scale == 3, None::<&str>)?,
-            &CheckMenuItem::with_id(app, "scale-4", "大", true, scale == 4, None::<&str>)?,
+            &CheckMenuItem::with_id(app, "scale-1", "小", true, scale == 1, None::<&str>)?,
+            &CheckMenuItem::with_id(app, "scale-2", "中", true, scale == 2, None::<&str>)?,
+            &CheckMenuItem::with_id(app, "scale-3", "大", true, scale == 3, None::<&str>)?,
         ],
     )?;
     let (hide_id, hide_text) =
@@ -314,9 +315,9 @@ pub fn on_menu(app: &AppHandle, id: &str) {
             let on = !ui(app).focus;
             set_focus(app, on);
         }
+        "scale-1" => set_scale(app, 1),
         "scale-2" => set_scale(app, 2),
         "scale-3" => set_scale(app, 3),
-        "scale-4" => set_scale(app, 4),
         "quit" => {
             flush_position(app);
             app.exit(0);

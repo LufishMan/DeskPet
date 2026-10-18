@@ -1,14 +1,52 @@
 // 把寵物精靈圖輸出成 PNG，方便檢查美術，也用來產生程式圖示。
 //   npm run preview-sprites -- <輸出.png>          整張預覽表
 //   npm run preview-sprites -- --hatch <輸出.png>  孵化動畫的分格
+//   npm run preview-sprites -- --style <畫風> <輸出.png>  畫風提案（代表品種）
 //   npm run preview-sprites -- --icon <輸出.png>   1024×1024 圖示原圖
 
-import { writeFileSync } from 'node:fs';
-import { crc32, deflateSync } from 'node:zlib';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { crc32, deflateSync, inflateSync } from 'node:zlib';
 
 import { H, W, renderScene, type Scene } from '../src/render.ts';
 import type { BubbleKind } from '../src/bubbles.ts';
+import { DEFAULT_STYLE, STYLES, type StyleId } from '../src/style.ts';
+import { ATLAS_SPECIES, registerCreamAtlas } from '../src/cream-atlas.ts';
 import type { Body, Family, PetView, Pose, Stage } from '../src/types.ts';
+
+// 與瀏覽器共用同一張原畫及裁切器；離線預覽只需 Node 內建 PNG 解碼，不增加相依套件。
+function readRgbaPng(file: URL): { w: number; h: number; rgba: Uint8ClampedArray } {
+  const data = readFileSync(file);
+  if (!data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error(`不是 PNG：${file}`);
+  const w = data.readUInt32BE(16), h = data.readUInt32BE(20);
+  if (data[24] !== 8 || data[25] !== 6 || data[28] !== 0) throw new Error('圖稿需為 8-bit RGBA、非交錯 PNG');
+  const chunks: Buffer[] = [];
+  for (let p = 8; p < data.length;) {
+    const size = data.readUInt32BE(p);
+    if (data.toString('ascii', p + 4, p + 8) === 'IDAT') chunks.push(data.subarray(p + 8, p + 8 + size));
+    p += size + 12;
+  }
+  const raw = inflateSync(Buffer.concat(chunks));
+  const stride = w * 4;
+  if (raw.length !== (stride + 1) * h) throw new Error('PNG 資料長度不符');
+  const rgba = new Uint8ClampedArray(w * h * 4);
+  for (let y = 0; y < h; y++) {
+    const filter = raw[y * (stride + 1)];
+    if (filter > 4) throw new Error('不支援的 PNG 濾波器');
+    for (let x = 0; x < stride; x++) {
+      const i = y * stride + x;
+      const a = x >= 4 ? rgba[i - 4] : 0, b = y > 0 ? rgba[i - stride] : 0, c = x >= 4 && y > 0 ? rgba[i - stride - 4] : 0;
+      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+      const predictor = filter === 0 ? 0 : filter === 1 ? a : filter === 2 ? b : filter === 3 ? Math.floor((a + b) / 2) : pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      rgba[i] = (raw[y * (stride + 1) + 1 + x] + predictor) & 255;
+    }
+  }
+  return { w, h, rgba };
+}
+
+for (const id of Object.keys(ATLAS_SPECIES) as (keyof typeof ATLAS_SPECIES)[]) {
+  const { w, h, rgba } = readRgbaPng(new URL(`../src/cream-${id}.png`, import.meta.url));
+  registerCreamAtlas(id, w, h, rgba);
+}
 
 function png(width: number, height: number, rgba: Uint8Array): Buffer {
   const raw = Buffer.alloc((width * 4 + 1) * height);
@@ -58,7 +96,7 @@ function view(family: Family, species: string, stage: Stage, body: Body = 'stand
 }
 
 function scene(v: PetView, pose: Pose = 'idle', bubble: BubbleKind | null = null, hop = false): Scene {
-  return { view: v, pose, breathe: false, tail: 0, hop, wobble: 0, bubble, hatch: null, sparkle: null };
+  return { view: v, pose, breathe: false, tail: 0, hop, wobble: 0, bubble, hatch: null, sparkle: null, style: DEFAULT_STYLE };
 }
 
 function frame(s: Scene): Uint8ClampedArray {
@@ -70,19 +108,32 @@ function frame(s: Scene): Uint8ClampedArray {
 const args = process.argv.slice(2);
 
 if (args[0] === '--icon') {
-  // 成年虎斑貓，取中間 32×32，放大 32 倍成 1024×1024
+  // 成年虎斑貓：取不透明像素的範圍，以整數倍放大、置中在 1024×1024 裡
   const src = frame(scene(view('cat', 'tabby_mix', 'adult')));
-  const size = 32;
-  const scale = 32;
-  const [ox, oy] = [4, H - size - 1];
-  const out = new Uint8Array(size * scale * size * scale * 4);
-  for (let y = 0; y < size * scale; y++) {
-    for (let x = 0; x < size * scale; x++) {
-      const s = ((oy + Math.floor(y / scale)) * W + ox + Math.floor(x / scale)) * 4;
-      out.set(src.subarray(s, s + 4), (y * size * scale + x) * 4);
+  let [x0, y0, x1, y1] = [W, H, 0, 0];
+  for (let y = 0; y < H; y++) {
+    for (let x = 0; x < W; x++) {
+      if (src[(y * W + x) * 4 + 3] === 0) continue;
+      [x0, y0, x1, y1] = [Math.min(x0, x), Math.min(y0, y), Math.max(x1, x), Math.max(y1, y)];
     }
   }
-  writeFileSync(args[1], png(size * scale, size * scale, out));
+  const SIZE = 1024;
+  const scale = Math.floor(SIZE / (Math.max(x1 - x0, y1 - y0) + 3));
+  const ox = Math.floor((SIZE - (x1 - x0 + 1) * scale) / 2);
+  const oy = Math.floor((SIZE - (y1 - y0 + 1) * scale) / 2);
+  const out = new Uint8Array(SIZE * SIZE * 4);
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const s = (y * W + x) * 4;
+      if (src[s + 3] === 0) continue;
+      for (let dy = 0; dy < scale; dy++) {
+        for (let dx = 0; dx < scale; dx++) {
+          out.set(src.subarray(s, s + 4), ((oy + (y - y0) * scale + dy) * SIZE + ox + (x - x0) * scale + dx) * 4);
+        }
+      }
+    }
+  }
+  writeFileSync(args[1], png(SIZE, SIZE, out));
   process.exit(0);
 }
 
@@ -112,7 +163,26 @@ let rows: Scene[][];
 let out = args[0] ?? 'sprites.png';
 let scaleArg = args[1];
 
-if (args[0] === '--hatch') {
+if (args[0] === '--style') {
+  // 畫風提案：幾個代表品種，從蛋到成年和幾個動作
+  const style = args[1] as StyleId;
+  if (!Object.hasOwn(STYLES, style)) throw new Error(`未知畫風：${style}`);
+  out = args[2] ?? 'style.png';
+  scaleArg = args[3];
+  const picks: [Family, string][] = [['cat', 'tabby_mix'], ['dog', 'shiba'], ['mouse', 'white_mouse'], ['hamster', 'syrian_hamster'], ['bear', 'panda']];
+  rows = picks.map(([family, species]) =>
+    [
+      scene(view(family, species, 'egg')),
+      scene(view(family, species, 'baby')),
+      scene(view(family, species, 'juvenile')),
+      scene(view(family, species, 'adult')),
+      scene(view(family, species, 'adult'), 'happy', 'heart', true),
+      scene(view(family, species, 'adult', 'standard', { sleeping: true }), 'sleep', 'zzz'),
+      scene(view(family, species, 'adult'), 'stand'),
+      scene(view(family, species, 'adult', 'very_fat')),
+    ].map((s) => ({ ...s, style })),
+  );
+} else if (args[0] === '--hatch') {
   // 每個科一列，從蛋到幼體
   out = args[1] ?? 'hatch.png';
   scaleArg = args[2];
@@ -141,15 +211,16 @@ if (args[0] === '--hatch') {
   ]);
 }
 
-const scale = Number(scaleArg ?? 3);
+const scale = Number(scaleArg ?? 1);
+if (!Number.isInteger(scale) || scale < 1 || scale > 8) throw new Error('預覽倍率必須為 1～8 的整數');
 const cellW = (W + 2) * scale;
 const cellH = (H + 2) * scale;
 const cols = rows[0].length;
 const sheetW = cols * cellW;
 const sheetH = rows.length * cellH;
 const sheet = new Uint8Array(sheetW * sheetH * 4);
-// 淺灰底，模擬桌面
-for (let i = 0; i < sheet.length; i += 4) sheet.set([214, 220, 228, 255], i);
+// 奶油展示底；實際寵物視窗仍然透明。
+for (let i = 0; i < sheet.length; i += 4) sheet.set([250, 241, 225, 255], i);
 
 rows.forEach((row, r) =>
   row.forEach((s, col) => {
@@ -160,7 +231,10 @@ rows.forEach((row, r) =>
         if (src[i + 3] === 0) continue;
         const dx = col * cellW + scale + x;
         const dy = r * cellH + scale + y;
-        sheet.set(src.subarray(i, i + 4), (dy * sheetW + dx) * 4);
+        // 淡陰影必須先和展示底合成，避免輸出的預覽表出現半透明洞。
+        const dst = (dy * sheetW + dx) * 4;
+        const alpha = src[i + 3] / 255;
+        for (let c = 0; c < 3; c++) sheet[dst + c] = Math.round(src[i + c] * alpha + sheet[dst + c] * (1 - alpha));
       }
     }
   }),

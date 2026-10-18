@@ -26,7 +26,7 @@ const BOSS_KEY: &str = "ctrl+alt+h";
 /// - 完全不連網（§14.5 A）：只關背景服務還不夠，WebView2 仍會連線（實測有 DNS over HTTPS
 ///   探測和 Microsoft 端點），所以直接讓所有主機名稱解析失敗，並把對外連線導向不存在的
 ///   本機 proxy。頁面和 IPC 由 WebView2 內部攔截處理，不經過網路，不受影響。
-/// - 關閉 GPU 加速：畫布只有 40×44，用軟體繪製就夠，記憶體少約 45 MB（§1 輕量）
+/// - 關閉 GPU 加速：畫布只有 100×100，用軟體繪製就夠，記憶體少約 45 MB（§1 輕量）
 const WEBVIEW_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection,DnsOverHttps \
      --host-resolver-rules=\"MAP * ~NOTFOUND\" --proxy-server=127.0.0.1:9 \
      --disable-background-networking --disable-component-update --disable-sync \
@@ -87,8 +87,8 @@ fn get_pet(state: State<'_, AppState>) -> Result<PetView, String> {
 
 /// 前端回報目前畫面中不透明的像素，用來設定視窗形狀（點擊穿透透明區域）
 #[tauri::command]
-fn set_shape(window: WebviewWindow, rows: Vec<u64>) -> Result<(), String> {
-    ui::set_shape(window.app_handle(), &window, rows)
+fn set_shape(window: WebviewWindow, spans: Vec<u16>) -> Result<(), String> {
+    ui::set_shape(window.app_handle(), &window, &spans)
 }
 
 #[tauri::command]
