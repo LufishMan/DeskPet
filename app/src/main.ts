@@ -6,7 +6,7 @@ import { invoke } from '@tauri-apps/api/core';
 import type { BubbleKind } from './bubbles.ts';
 import { H, W, renderScene, shapeOf, type Scene } from './render.ts';
 import { DEFAULT_STYLE } from './style.ts';
-import { loadCreamAtlases } from './cream-atlas.ts';
+import { loadAtlas } from './cream-atlas.ts';
 import type { PetView, Pose, Stage } from './types.ts';
 
 const canvas = document.getElementById('pet') as HTMLCanvasElement;
@@ -231,7 +231,7 @@ canvas.addEventListener('contextmenu', (e) => {
 document.addEventListener('visibilitychange', () => schedule(0));
 
 // 先準備本機圖稿，首次顯示即使用原畫；載入失敗仍可由既有像素繪圖器呈現。
-void loadCreamAtlases()
+void loadAtlas()
   .catch((error) => console.error('奶油圖稿載入失敗，使用備援造型', error))
   .finally(() => {
     void refresh();

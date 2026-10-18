@@ -343,7 +343,7 @@
 | 動畫狀態 | idle、walk、sleep、eat、happy、stressed、sad、tired、interact、evolve |
 | 體型精靈圖 | 目前用寬度縮放表現 5 種體型（約 ±12%）；之後可補瘦、胖的原畫格 |
 | 美術量估算 | 目前 18 品種 × 5 格（幼年、少年、成年待機、成年開心、成年睡眠）＝ 90 格。走路、眨眼、獨立尾巴等動作日後擴充圖格 |
-| 製作方式 | **原畫圖集**（`app/src/cream-*.png`，三張各 5 欄 × 6 列，說明見 `app/src/cream-art.md`）：PNG 隨程式打包，啟動時在本機解碼，`cream-atlas.ts` 依透明間隙切出每一格、去掉 alpha < 200 的半透明霧邊、只留每格最大的連通區，再以 nearest-neighbor 縮成邏輯像素。不連網、不需要圖片函式庫（瀏覽器內建 PNG 解碼）。蛋、裂痕和孵化動畫仍是程序化產生（`egg.ts`）；圖集缺格或載入失敗時，改用程序化造型（`sit.ts`、`side.ts`、`curl.ts`，品種參數在 `palette.ts`）。`npm run preview-sprites` 用同一個裁切器輸出預覽表 |
+| 製作方式 | **原畫圖集**：原始圖稿在 `art/cream/`（三張各 5 欄 × 6 列，說明見 `art/cream/README.md`），不打包進程式。`npm run bake-atlas` 預先切格、去掉 alpha < 200 的半透明霧邊、只留每格最大的連通區、以 nearest-neighbor 縮成邏輯像素，打包成一張小圖集 `app/src/assets/pets.png`（約 400 KB）和格子座標 `pets-atlas.ts`。程式啟動時只在本機解碼這張圖集（`cream-atlas.ts`），不連網、不需要圖片函式庫。蛋、裂痕和孵化動畫仍是程序化產生（`egg.ts`）；圖集缺格或載入失敗時，改用程序化造型（`side.ts`、`curl.ts`，品種參數在 `palette.ts`）。`npm run preview-sprites` 讀同一張圖集輸出預覽表 |
 | 玩具與圖示 | 玩具 16×16；圖示泡泡 8×8 |
 
 **各品種的辨識重點**（原畫依此繪製；程序化備援的參數在 `app/src/palette.ts`）：
@@ -371,7 +371,7 @@
 
 ### 11.3 奶油像素視覺定稿（2026-10-18）
 
-**同日原畫接入更新**：使用者進一步指定直接使用繪製圖稿。奶油預設畫風現改用 `app/src/cream-cats.png`、`cream-dogs.png`、`cream-small.png` 三張透明原畫（18 品種、90 格），由 `cream-atlas.ts` 在啟動時讀取，再交給原有 Canvas／RGBA／視窗遮罩流程。這項決定取代 §11.2「不使用外部美術檔」及下文純程序化角色呈現的描述；蛋仍程序化，原繪圖器留作備援，無新增相依套件、後端模組或視窗。動作覆蓋、縮放與色盤處理詳見 `app/src/cream-art.md`。
+**同日原畫接入更新**：使用者進一步指定直接使用繪製圖稿。奶油預設畫風現改用 `art/cream/` 的三張透明原畫（18 品種、90 格），預先烘焙成小圖集 `app/src/assets/pets.png`，由 `cream-atlas.ts` 在啟動時讀取，再交給原有 Canvas／RGBA／視窗遮罩流程。這項決定取代 §11.2「不使用外部美術檔」及下文純程序化角色呈現的描述；蛋仍程序化，原繪圖器留作備援，無新增相依套件、後端模組或視窗。動作覆蓋、縮放與色盤處理詳見 `art/cream/README.md`。
 
 本節更新 §11.2 的畫風與色盤，以使用者選定的 B 版「柔和奶油像素」為準。保留原有 Canvas 2D、100×100 邏輯畫布、透明視窗、整數倍縮放、品種參數及成長機制，不改專案架構。
 

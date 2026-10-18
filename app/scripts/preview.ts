@@ -4,75 +4,20 @@
 //   npm run preview-sprites -- --style <畫風> <輸出.png>  畫風提案（代表品種）
 //   npm run preview-sprites -- --icon <輸出.png>   1024×1024 圖示原圖
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { crc32, deflateSync, inflateSync } from 'node:zlib';
+import { writeFileSync } from 'node:fs';
+
+import { encodePng as png, readPng } from './png.ts';
 
 import { H, W, renderScene, type Scene } from '../src/render.ts';
 import type { BubbleKind } from '../src/bubbles.ts';
 import { DEFAULT_STYLE, STYLES, type StyleId } from '../src/style.ts';
-import { ATLAS_SPECIES, registerCreamAtlas } from '../src/cream-atlas.ts';
+import { registerAtlas } from '../src/cream-atlas.ts';
 import type { Body, Family, PetView, Pose, Stage } from '../src/types.ts';
 
-// 與瀏覽器共用同一張原畫及裁切器；離線預覽只需 Node 內建 PNG 解碼，不增加相依套件。
-function readRgbaPng(file: URL): { w: number; h: number; rgba: Uint8ClampedArray } {
-  const data = readFileSync(file);
-  if (!data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) throw new Error(`不是 PNG：${file}`);
-  const w = data.readUInt32BE(16), h = data.readUInt32BE(20);
-  if (data[24] !== 8 || data[25] !== 6 || data[28] !== 0) throw new Error('圖稿需為 8-bit RGBA、非交錯 PNG');
-  const chunks: Buffer[] = [];
-  for (let p = 8; p < data.length;) {
-    const size = data.readUInt32BE(p);
-    if (data.toString('ascii', p + 4, p + 8) === 'IDAT') chunks.push(data.subarray(p + 8, p + 8 + size));
-    p += size + 12;
-  }
-  const raw = inflateSync(Buffer.concat(chunks));
-  const stride = w * 4;
-  if (raw.length !== (stride + 1) * h) throw new Error('PNG 資料長度不符');
-  const rgba = new Uint8ClampedArray(w * h * 4);
-  for (let y = 0; y < h; y++) {
-    const filter = raw[y * (stride + 1)];
-    if (filter > 4) throw new Error('不支援的 PNG 濾波器');
-    for (let x = 0; x < stride; x++) {
-      const i = y * stride + x;
-      const a = x >= 4 ? rgba[i - 4] : 0, b = y > 0 ? rgba[i - stride] : 0, c = x >= 4 && y > 0 ? rgba[i - stride - 4] : 0;
-      const p = a + b - c, pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
-      const predictor = filter === 0 ? 0 : filter === 1 ? a : filter === 2 ? b : filter === 3 ? Math.floor((a + b) / 2) : pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-      rgba[i] = (raw[y * (stride + 1) + 1 + x] + predictor) & 255;
-    }
-  }
-  return { w, h, rgba };
-}
-
-for (const id of Object.keys(ATLAS_SPECIES) as (keyof typeof ATLAS_SPECIES)[]) {
-  const { w, h, rgba } = readRgbaPng(new URL(`../src/cream-${id}.png`, import.meta.url));
-  registerCreamAtlas(id, w, h, rgba);
-}
-
-function png(width: number, height: number, rgba: Uint8Array): Buffer {
-  const raw = Buffer.alloc((width * 4 + 1) * height);
-  for (let y = 0; y < height; y++) {
-    raw[y * (width * 4 + 1)] = 0;
-    Buffer.from(rgba.buffer, rgba.byteOffset + y * width * 4, width * 4).copy(raw, y * (width * 4 + 1) + 1);
-  }
-  const chunk = (type: string, data: Buffer): Buffer => {
-    const length = Buffer.alloc(4);
-    length.writeUInt32BE(data.length);
-    const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
-    const crc = Buffer.alloc(4);
-    crc.writeUInt32BE(crc32(body));
-    return Buffer.concat([length, body, crc]);
-  };
-  const header = Buffer.alloc(13);
-  header.writeUInt32BE(width, 0);
-  header.writeUInt32BE(height, 4);
-  header[8] = 8;
-  header[9] = 6;
-  return Buffer.concat([
-    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
-    chunk('IHDR', header),
-    chunk('IDAT', deflateSync(raw)),
-    chunk('IEND', Buffer.alloc(0)),
-  ]);
+// 與瀏覽器共用同一張圖集和切格方式
+{
+  const { w, h, rgba } = readPng(new URL('../src/assets/pets.png', import.meta.url));
+  registerAtlas(w, h, rgba);
 }
 
 function view(family: Family, species: string, stage: Stage, body: Body = 'standard', extra: Partial<PetView> = {}): PetView {
